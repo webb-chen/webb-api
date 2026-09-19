@@ -21,7 +21,7 @@
   "author": "webb-chen",
   "repository": {
     "type": "git",
-    "url": "https://github.com/webb-chen/new-api"
+    "url": "https://github.com/webb-chen/webb-api"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",

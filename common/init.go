@@ -25,7 +25,7 @@ var (
 func printHelp() {
 	fmt.Println("WebbAPI(Based OneAPI) " + Version + " - The next-generation LLM gateway and AI asset management system supports multiple languages.")
 	fmt.Println("Original Project: OneAPI by JustSong - https://github.com/songquanpeng/one-api")
-	fmt.Println("Maintainer: webb-chen - https://github.com/webb-chen/new-api")
+	fmt.Println("Maintainer: webb-chen - https://github.com/webb-chen/webb-api")
 	fmt.Println("Usage: webb-api [--port <port>] [--log-dir <log directory>] [--version] [--help]")
 }
 

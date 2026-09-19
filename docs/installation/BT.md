@@ -57,7 +57,7 @@
 version: '3'
 services:
   webb-api:
-    image: calciumion/new-api:latest
+    image: webb-chen/webb-api:latest
     container_name: webb-api
     restart: always
     ports:
@@ -126,7 +126,7 @@ volumes:
 
 ```bash
 # 拉取最新镜像
-docker pull calciumion/new-api:latest
+docker pull webb-chen/webb-api:latest
 
 # 重启容器
 docker-compose down && docker-compose up -d
@@ -139,7 +139,7 @@ docker-compose down && docker-compose up -d
 - [官方文档](https://docs.newapi.pro/zh/docs/installation)
 - [环境变量配置](https://docs.newapi.pro/zh/docs/installation/config-maintenance/environment-variables)
 - [常见问题](https://docs.newapi.pro/zh/docs/support/faq)
-- [GitHub 仓库](https://github.com/webb-chen/new-api)
+- [GitHub 仓库](https://github.com/webb-chen/webb-api)
 
 ***
 
