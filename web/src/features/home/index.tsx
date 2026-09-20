@@ -121,7 +121,7 @@ export function Home() {
   }
 
   return (
-    <PublicLayout showMainContainer={false}>
+    <PublicLayout showMainContainer={false} className='landing-editorial'>
       <Hero isAuthenticated={isAuthenticated} />
       <Stats />
       <Features />

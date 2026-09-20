@@ -1,5 +1,13 @@
 {
   "translation": {
+    "An AI gateway, edited for clarity": "一座为清晰而编排的 AI 网关",
+    "Every model, behind": "所有模型，都在",
+    "one quiet gateway.": "一座安静的网关之后。",
+    "A unified API for the models you already use. Route traffic, track spend, and keep every key where you can find it.": "用一套统一 API 接入你已在使用的模型：路由流量、追踪开销，让每一把密钥都有迹可循。",
+    "Written for developers,": "为开发者而写，",
+    "built for scale": "为规模而生",
+    "Bring your own keys.": "带上你自己的密钥。",
+    "We handle the rest.": "剩下的交给我们。",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
