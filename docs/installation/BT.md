@@ -48,33 +48,31 @@
 5. 点击 **确认** 开始安装
 6. 等待安装完成后，访问 `http://您的服务器IP:3000` 即可使用
 
-### 方法二：使用 Docker Compose
+### 方法二：使用 Docker Compose（源码本地构建）
+
+> ⚠️ 本项目**未发布公开容器镜像**，请勿使用 `image: webb-chen/webb-api:latest` 这类写法。该镜像不存在，且不在国内镜像加速服务的白名单内，拉取会直接失败（报错：`this image is not in the allowlist`）。
+> 正确方式是拉取源码后在服务器上本地构建。
 
 1. 在宝塔面板中创建网站目录，如 `/www/wwwroot/webb-api`
-2. 创建 `docker-compose.yml` 文件：
-
-```yaml
-version: '3'
-services:
-  webb-api:
-    image: webb-chen/webb-api:latest
-    container_name: webb-api
-    restart: always
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/data
-    environment:
-      - SESSION_SECRET=your_session_secret_here  # 请修改为随机字符串
-      - TZ=Asia/Shanghai
-```
-
-1. 在终端中进入目录并启动：
+2. 在终端中拉取源码：
 
 ```bash
-cd /www/wwwroot/webb-api
-docker-compose up -d
+cd /www/wwwroot
+git clone https://github.com/webb-chen/webb-api.git
+cd webb-api
 ```
+
+3. 项目根目录已内置 `docker-compose.yml`（包含应用 + PostgreSQL + Redis 三个服务）。**部署前请先修改其中的默认密码**，然后启动：
+
+```bash
+# 应用镜像由本地 Dockerfile 构建，不经过任何镜像仓库
+# 仅 redis / postgres 需要从 Docker Hub 拉取，二者均为官方镜像，国内加速可用
+docker compose up -d --build
+```
+
+4. 首次构建需编译前端与后端，耗时数分钟。等待构建完成后访问 `http://您的服务器IP:3000`
+
+> 💡 `SESSION_SECRET` 在多机部署时必填且需保持一致。可在 `docker-compose.yml` 的 `environment` 段中取消该行注释并填入随机字符串（生成方式见下文「生成随机密钥」）。
 
 ***
 
@@ -125,12 +123,24 @@ volumes:
 ### Q4：如何更新版本？
 
 ```bash
-# 拉取最新镜像
-docker pull webb-chen/webb-api:latest
+cd /www/wwwroot/webb-api
 
-# 重启容器
-docker-compose down && docker-compose up -d
+# 拉取最新源码
+git pull
+
+# 重新构建并重启（应用镜像为本地构建，无需 docker pull）
+docker compose up -d --build
 ```
+
+### Q5：拉取镜像报「这镜像不在白名单 / this image is not in the allowlist」？
+
+该报错来自 Docker 镜像加速服务（如 DaoCloud public-image-mirror）。加速服务只放行白名单内的镜像，非白名单镜像会被直接拒绝，报错中会附带 `https://github.com/DaoCloud/public-image-mirror/issues/2328` 链接。
+
+本项目**不使用远程应用镜像**，按「方法二」在本地构建即可完全避免该问题。若仍需拉取其他镜像，可任选一种：
+
+1. **直连 Docker Hub**：从 `/etc/docker/daemon.json` 中移除 `registry-mirrors` 配置，执行 `systemctl restart docker`
+2. **显式指定仓库地址绕过加速服务**：`docker pull docker.io/<namespace>/<image>:<tag>`
+3. **申请单次同步**：向加速服务仓库提交同步 Issue（DaoCloud 用户：`https://github.com/DaoCloud/public-image-mirror/issues/new?template=sync-image.yml`）
 
 ***
 

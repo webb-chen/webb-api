@@ -1,0 +1,121 @@
+/*
+ * Landing page — warm editorial theme.
+ *
+ * Scoped to `.landing-editorial` so it only affects the marketing homepage
+ * (`/`) and never leaks into the dashboard, auth, tables, or sidebar. It
+ * re-declares the design tokens as CSS variables inside that scope, so the
+ * existing Tailwind color utilities (`bg-background`, `text-foreground`,
+ * `border-border`, …) resolve to the editorial palette without touching any
+ * component logic.
+ *
+ * Palette: warm paper canvas, ink text, a single burnt-orange accent, and
+ * hairline warm-grey borders. Headings switch to the serif face already
+ * available in the project (`--font-serif`).
+ */
+
+.landing-editorial {
+  /* ---------------------------------------------------- Light editorial */
+  --background: #faf6ef;
+  --foreground: #1f1b16;
+  --card: #fffdf9;
+  --card-foreground: #1f1b16;
+  --popover: #fffdf9;
+  --popover-foreground: #1f1b16;
+  --primary: #c2410c;
+  --primary-foreground: #fffaf4;
+  --secondary: #f3ede2;
+  --secondary-foreground: #3b342b;
+  --muted: #f3ede2;
+  --muted-foreground: #6f6558;
+  --accent: #efe5d4;
+  --accent-foreground: #432409;
+  --destructive: #b3381f;
+  --destructive-foreground: #fff5f1;
+  --success: #3f6f43;
+  --success-foreground: #f4faf4;
+  --warning: #a8690a;
+  --warning-foreground: #fff9ec;
+  --info: #31576b;
+  --info-foreground: #f2f8fb;
+  --neutral: #8a8073;
+  --neutral-foreground: #f9f5ee;
+  --border: #e6ddcd;
+  --input: #e0d6c4;
+  --ring: #c2410c;
+  --chart-1: #c2410c;
+  --chart-2: #b8860b;
+  --chart-3: #6b7a3d;
+  --chart-4: #9a5642;
+  --chart-5: #4d7268;
+  --overview-accent-1: #c2410c;
+  --overview-accent-2: #b8860b;
+  --overview-accent-3: #6b7a3d;
+  --sidebar: #f3ede2;
+  --sidebar-foreground: #1f1b16;
+  --sidebar-primary: #c2410c;
+  --sidebar-primary-foreground: #fffaf4;
+  --sidebar-accent: #efe5d4;
+  --sidebar-accent-foreground: #432409;
+  --sidebar-border: #e6ddcd;
+  --sidebar-ring: #c2410c;
+  --skeleton-base: #eee6d7;
+  --skeleton-highlight: #faf6ef;
+  --radius: 0.5rem;
+
+  /* Editorial serif voice for headings, sans for running text. */
+  --landing-heading-font: var(--font-serif);
+}
+
+.landing-editorial h1,
+.landing-editorial h2,
+.landing-editorial h3 {
+  font-family: var(--landing-heading-font);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* --------------------------------------------------------- Dark editorial */
+.dark .landing-editorial {
+  --background: #17130e;
+  --foreground: #ece5da;
+  --card: #1f1a14;
+  --card-foreground: #ece5da;
+  --popover: #241e17;
+  --popover-foreground: #ece5da;
+  --primary: #ed8a4a;
+  --primary-foreground: #1d1003;
+  --secondary: #292219;
+  --secondary-foreground: #ece5da;
+  --muted: #262019;
+  --muted-foreground: #b3a897;
+  --accent: #3a2f24;
+  --accent-foreground: #f3d9b7;
+  --destructive: #e06a4f;
+  --destructive-foreground: #1d0f0a;
+  --success: #7fb883;
+  --success-foreground: #0e1810;
+  --warning: #dfae5a;
+  --warning-foreground: #1d1708;
+  --info: #87b7cd;
+  --info-foreground: #0a141a;
+  --neutral: #9a9083;
+  --neutral-foreground: #17130e;
+  --border: #3a3127;
+  --input: #463b2e;
+  --ring: #ed8a4a;
+  --chart-1: #ed8a4a;
+  --chart-2: #d9b45a;
+  --chart-3: #a7b56a;
+  --chart-4: #c98a72;
+  --chart-5: #7fb1a5;
+  --sidebar: #1f1a14;
+  --sidebar-foreground: #ece5da;
+  --sidebar-primary: #ed8a4a;
+  --sidebar-primary-foreground: #1d1003;
+  --sidebar-accent: #3a2f24;
+  --sidebar-accent-foreground: #f3d9b7;
+  --sidebar-border: #3a3127;
+  --sidebar-ring: #ed8a4a;
+  --skeleton-base: #2a2319;
+  --skeleton-highlight: #17130e;
+}
