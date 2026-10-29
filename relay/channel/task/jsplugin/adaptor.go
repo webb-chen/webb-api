@@ -908,8 +908,8 @@ func (a *TaskAdaptor) ListArtifacts(task *model.Task) ([]channel.TaskArtifact, e
 	return validateTaskArtifacts(value)
 }
 
-func (a *TaskAdaptor) BuildContentRequest(task *model.Task, artifactKey string, clientRequest channel.TaskArtifactClientRequest) (*channel.TaskContentRequest, error) {
-	if !a.hasHook(context.Background(), "buildContentRequest") {
+func (a *TaskAdaptor) BuildContentRequest(parent context.Context, task *model.Task, artifactKey string, clientRequest channel.TaskArtifactClientRequest) (*channel.TaskContentRequest, error) {
+	if !a.hasHook(parent, "buildContentRequest") {
 		return nil, nil
 	}
 	if a.info == nil {
@@ -930,7 +930,7 @@ func (a *TaskAdaptor) BuildContentRequest(task *model.Task, artifactKey string, 
 		return nil, err
 	}
 	var descriptor requestDescriptor
-	if err = a.plugin.Engine.CallInto(context.Background(), &descriptor, "buildContentRequest", ctx); err != nil {
+	if err = a.plugin.Engine.CallInto(parent, &descriptor, "buildContentRequest", ctx); err != nil {
 		return nil, err
 	}
 	method := strings.ToUpper(strings.TrimSpace(descriptor.Method))
@@ -1414,14 +1414,18 @@ func (a *TaskAdaptor) validateResolvedUsageRequest(request any, models ...string
 }
 
 func (a *TaskAdaptor) validateResolvedUsageValue(value any, usageSchema map[string]pluginruntime.UsageFieldSchema) error {
+	autoDuration := pluginruntime.UsesDurationAuto(a.plugin.Meta)
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, item := range typed {
 			if schema, declared := usageSchema[key]; declared {
-				if _, err := validateUsageValue(item, schema, true); err != nil {
+				if _, err := validateUsageValue(item, schema, true, autoDuration); err != nil {
 					return err
 				}
 			} else if limit, canonical := canonicalUsageLimit(key); canonical {
+				if a.acceptsAutoDuration(item, limit) {
+					continue
+				}
 				if err := validateUsageLimit(item, limit, true); err != nil {
 					return err
 				}
@@ -1450,7 +1454,7 @@ func (a *TaskAdaptor) validatedUsageRatios(facts map[string]any, models ...strin
 	for key, value := range facts {
 		validated[key] = value
 		if schema, declared := usageSchema[key]; declared {
-			number, err := validateUsageValue(value, schema, false)
+			number, err := validateUsageValue(value, schema, false, false)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1499,7 +1503,7 @@ func (a *TaskAdaptor) validatedCompletionUsageFacts(facts any, models ...string)
 	for key, value := range values {
 		validated[key] = value
 		if schema, declared := usageSchema[key]; declared {
-			number, err := validateUsageValue(value, schema, false)
+			number, err := validateUsageValue(value, schema, false, false)
 			if err != nil {
 				return nil, err
 			}
@@ -1535,7 +1539,7 @@ func (a *TaskAdaptor) validatedCompletionUsageFacts(facts any, models ...string)
 	return validated, nil
 }
 
-func validateUsageValue(value any, schema pluginruntime.UsageFieldSchema, allowNumericString bool) (float64, error) {
+func validateUsageValue(value any, schema pluginruntime.UsageFieldSchema, allowNumericString bool, allowAutoDuration bool) (float64, error) {
 	if len(schema.Enum) > 0 {
 		text, ok := value.(string)
 		if !ok {
@@ -1555,6 +1559,11 @@ func validateUsageValue(value any, schema pluginruntime.UsageFieldSchema, allowN
 	number, ok := usageNumber(value, allowNumericString)
 	if !ok {
 		return 0, fmt.Errorf("plugin usage value must be a number")
+	}
+	// duration-auto@1 plugins may keep the -1 "automatic duration" sentinel in
+	// duration request fields; they resolve it to a billable value in JS.
+	if allowAutoDuration && schema.Unit == "second" && number == -1 {
+		return number, nil
 	}
 	if schema.Unit == "token" || schema.Unit == "credit" {
 		if math.IsNaN(number) || math.IsInf(number, 0) || number < 0 {
@@ -1593,6 +1602,16 @@ func validateUsageNumberLimit(number float64, limit int) error {
 		return fmt.Errorf("plugin usage value exceeds the host limit")
 	}
 	return nil
+}
+
+// acceptsAutoDuration reports whether value is the -1 automatic-duration
+// sentinel carried by a duration request field of a duration-auto@1 plugin.
+func (a *TaskAdaptor) acceptsAutoDuration(value any, limit int) bool {
+	if limit != relaycommon.MaxTaskDurationSeconds || !pluginruntime.UsesDurationAuto(a.plugin.Meta) {
+		return false
+	}
+	number, ok := usageNumber(value, true)
+	return ok && number == -1
 }
 
 func usageNumber(value any, allowNumericString bool) (float64, bool) {

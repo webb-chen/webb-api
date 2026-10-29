@@ -1,0 +1,67 @@
+// 自动生成：统一授权平台接入片段（Node.js / NestJS）
+// 完整规范见 docs/接入统一授权平台-适配开发规范.md
+const crypto = require('crypto');
+const fs = require('fs');
+
+const LICENSE_PRODUCT = 'api';
+const LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1/GN15hOhgNRsu6PfK8V
+bQk1d4ekA7naBZT4cR5FXFJ2grlznsh/QRDHonII7Ud4Q0z0exHXWvL0z2vVKAL7
++ivHJrIso7pInb0FxH0Ewmxx1TbdyhS7tbquL5ZNUCi7DM+cIil0+7Fwg/U/QNs7
+qDi/w6KPZMCDCoudaWTvXrpWQXIwwsyfsrHkfcE3vGjbtxSomwxuoyJs5qA21AdZ
+VT5GXjn67B4uUJ1Tf34bbdokN+g3c1t2dVi9zFVHIDOR65+TIOfZOPSLXEvPuZZO
+rA+GUpRGO2kjAYEMh8vjUwaOETDdq+jPkMU/LULGvX449VnepnD9pRD8358cvC2P
+6QIDAQAB
+-----END PUBLIC KEY-----
+`;
+
+function machineCode() {
+  if (process.env.LICENSE_MACHINE_CODE) return process.env.LICENSE_MACHINE_CODE;
+  let raw = 'unknown';
+  try {
+    raw = fs.readFileSync('/etc/machine-id', 'utf8');
+  } catch (_) {}
+  return crypto.createHash('sha256').update('ULP-LICENSE-V1:' + raw).digest('hex').slice(0, 32);
+}
+
+function verifyFile(file) {
+  let env;
+  try {
+    env = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return 'license_missing';
+  }
+  let data, sign;
+  try {
+    data = Buffer.from(env.data, 'base64');
+    sign = Buffer.from(env.sign, 'base64');
+  } catch (_) {
+    return 'license_malformed';
+  }
+  let ok = false;
+  try {
+    ok = crypto.verify('sha256', data, LICENSE_PUBLIC_KEY, sign);
+  } catch (_) {
+    return 'license_no_public_key';
+  }
+  if (!ok) return 'license_bad_signature';
+
+  let payload;
+  try {
+    payload = JSON.parse(data.toString('utf8'));
+  } catch (_) {
+    return 'license_malformed';
+  }
+  if (payload.schema_version !== 1 || payload.platform !== 'unified-license-platform') {
+    return 'license_malformed';
+  }
+  if (payload.product !== LICENSE_PRODUCT) return 'license_product_mismatch';
+  if (payload.machine_code !== '*' && payload.machine_code !== machineCode()) {
+    return 'license_machine_mismatch';
+  }
+  if (payload.expire_time) {
+    const deadline = Date.parse(payload.expire_time) + (payload.grace_days || 0) * 86400000;
+    if (Date.now() > deadline) return 'license_expired';
+  }
+  return 'ok';
+}

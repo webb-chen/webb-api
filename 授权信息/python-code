@@ -1,0 +1,69 @@
+# 自动生成：统一授权平台接入片段（Python 3）
+# 依赖：pip install cryptography
+# 完整规范见 docs/接入统一授权平台-适配开发规范.md
+import base64
+import hashlib
+import json
+import os
+import time
+from datetime import datetime
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
+LICENSE_PRODUCT = "api"
+LICENSE_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1/GN15hOhgNRsu6PfK8V
+bQk1d4ekA7naBZT4cR5FXFJ2grlznsh/QRDHonII7Ud4Q0z0exHXWvL0z2vVKAL7
++ivHJrIso7pInb0FxH0Ewmxx1TbdyhS7tbquL5ZNUCi7DM+cIil0+7Fwg/U/QNs7
+qDi/w6KPZMCDCoudaWTvXrpWQXIwwsyfsrHkfcE3vGjbtxSomwxuoyJs5qA21AdZ
+VT5GXjn67B4uUJ1Tf34bbdokN+g3c1t2dVi9zFVHIDOR65+TIOfZOPSLXEvPuZZO
+rA+GUpRGO2kjAYEMh8vjUwaOETDdq+jPkMU/LULGvX449VnepnD9pRD8358cvC2P
+6QIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+
+def machine_code() -> str:
+    override = os.getenv("LICENSE_MACHINE_CODE")
+    if override:
+        return override
+    try:
+        raw = open("/etc/machine-id", "rb").read()
+    except OSError:
+        raw = b"unknown"
+    return hashlib.sha256(b"ULP-LICENSE-V1:" + raw).hexdigest()[:32]
+
+
+def verify_file(path: str) -> str:
+    try:
+        env = json.load(open(path, "rb"))
+    except Exception:
+        return "license_missing"
+    try:
+        data = base64.b64decode(env["data"])
+        sign = base64.b64decode(env["sign"])
+    except Exception:
+        return "license_malformed"
+    try:
+        key = serialization.load_pem_public_key(LICENSE_PUBLIC_KEY.encode())
+        key.verify(sign, data, padding.PKCS1v15(), hashes.SHA256())
+    except Exception:
+        return "license_bad_signature"
+    try:
+        payload = json.loads(data)
+    except Exception:
+        return "license_malformed"
+    if payload.get("schema_version") != 1 or payload.get("platform") != "unified-license-platform":
+        return "license_malformed"
+    if payload.get("product") != LICENSE_PRODUCT:
+        return "license_product_mismatch"
+    if payload.get("machine_code") != "*" and payload.get("machine_code") != machine_code():
+        return "license_machine_mismatch"
+    expire = payload.get("expire_time")
+    if expire:
+        deadline = datetime.fromisoformat(expire.replace("Z", "+00:00")).timestamp()
+        deadline += int(payload.get("grace_days", 0)) * 86400
+        if time.time() > deadline:
+            return "license_expired"
+    return "ok"

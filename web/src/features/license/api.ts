@@ -19,33 +19,55 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 
 /**
- * 授权文件解析后的明文载荷（与后端 pkg/license.LicenseData 对应）。
- * ExpireUnix 是 Unix 秒，后端用 UTC 时间生成。
+ * 统一授权平台（ULP）License Format v1 的载荷字段。
+ * 与后端 `pkg/license.Payload` 一一对应；永久授权的 expire_time 为 null。
  */
-export interface LicenseData {
+export interface LicensePayload {
+  license_id: string
+  product: string
+  product_display: string
   customer: string
-  expire_unix: number
+  customer_contact?: string
+  issued_at: string | null
+  expire_time: string | null
+  grace_days: number
+  machine_code: string
+  instance_id?: string
+  features?: Record<string, unknown>
+  permanent: boolean
 }
 
-export type LicenseStatus =
-  | 'none'
-  | 'valid'
-  | 'grace'
-  | 'expired'
-  | 'forged'
+/**
+ * 统一状态码词表（《统一授权文件格式规范》§7）。
+ * 前端展示与跳转判据都必须使用这套字符串。
+ */
+export type LicenseCode =
+  | 'ok'
+  | 'license_grace'
+  | 'license_disabled'
+  | 'license_not_init'
+  | 'license_missing'
+  | 'license_malformed'
+  | 'license_bad_signature'
+  | 'license_expired'
+  | 'license_clock_rollback'
+  | 'license_machine_mismatch'
+  | 'license_product_mismatch'
+  | 'license_no_public_key'
 
 export interface LicenseStatusData {
-  status: LicenseStatus
-  data?: LicenseData
-  checked_at_unix: number
-  days_left: number
+  code: string
+  valid: boolean
   message: string
+  in_grace: boolean
+  remaining_days: number
+  checked_at: string
+  license: LicensePayload | null
 }
 
-export interface LicenseStatusResponse {
+export interface LicenseStatusResponse extends LicenseStatusData {
   success: boolean
-  message?: string
-  data?: LicenseStatusData
+  data: LicenseStatusData
 }
 
 export interface LicenseMachineCodeData {
@@ -54,8 +76,9 @@ export interface LicenseMachineCodeData {
 
 export interface LicenseMachineCodeResponse {
   success: boolean
-  message?: string
-  data?: LicenseMachineCodeData
+  code: string
+  machine_code: string
+  data: LicenseMachineCodeData
 }
 
 /**
@@ -70,8 +93,7 @@ export async function getLicenseStatus(): Promise<LicenseStatusResponse> {
 }
 
 /**
- * 获取当前服务器硬件指纹（机器码）。
- * 仅在后端显式启用机器码绑定时返回非空。
+ * 获取当前服务器统一机器码（ULP-LICENSE-V1 算法）。
  */
 export async function getMachineCode(): Promise<LicenseMachineCodeResponse> {
   const res = await api.get('/api/license/machine-code')
@@ -79,8 +101,9 @@ export async function getMachineCode(): Promise<LicenseMachineCodeResponse> {
 }
 
 /**
- * 上传新的授权文件。file 为浏览器 File 对象，必须带 Authorization 头。
- * 成功时后端会立刻重载授权模块，再次校验签名 + 到期时间 + 机器码。
+ * 上传新的授权文件。file 为浏览器 File 对象。
+ * 成功时后端会立刻重载授权模块，再次校验签名 + 产品 + 机器码 + 到期时间。
+ * 校验失败时后端仍返回 HTTP 200，用 `code`/`message` 表达失败原因。
  */
 export async function uploadLicense(
   file: File

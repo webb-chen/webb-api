@@ -369,8 +369,11 @@ func InitResources() error {
 
 	// 初始化授权（License）模块：加载 RSA 公钥 + 读取授权文件 + 启动后台复检协程。
 	// Init 内部已包含"立即校验一次 + 启动后台复检"，无需单独的 Start。
-	// 公钥未配置（占位符）时仅打日志、不阻断启动，方便开发环境直接跑起来。
-	_ = license.Init()
+	// 不变量 4：初始化失败（公钥未配置/无法解析等）必须终止启动，
+	// 绝不能静默放行——授权模块没起来就对外服务，等于没有授权保护。
+	if err := license.Init(); err != nil {
+		common.FatalLog("授权模块初始化失败，拒绝启动: " + err.Error())
+	}
 
 	// Load custom OAuth providers from database
 	err = oauth.LoadCustomProviders()

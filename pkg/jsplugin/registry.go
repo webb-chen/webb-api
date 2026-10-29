@@ -326,7 +326,17 @@ func CompilePlugin(source string, options Options) (*LoadedPlugin, error) {
 		if slices.Contains(meta.RequiredCapabilities, CapabilitySubmitSSEDelta) {
 			requiredHooks = append(requiredHooks, "parseSubmitEventDelta")
 		} else {
-			requiredHooks = append(requiredHooks, "parseSubmitEvent")
+			// Delta framing is also selected implicitly by exporting
+			// parseSubmitEventDelta without the capability declaration.
+			delta, deltaErr := engine.HasCallablePath(context.Background(), "parseSubmitEventDelta")
+			if deltaErr != nil {
+				return nil, deltaErr
+			}
+			if delta {
+				requiredHooks = append(requiredHooks, "parseSubmitEventDelta")
+			} else {
+				requiredHooks = append(requiredHooks, "parseSubmitEvent")
+			}
 		}
 	}
 	if meta.FetchMode == "batch" {

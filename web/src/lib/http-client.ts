@@ -83,12 +83,30 @@ function redirectToSignIn(): void {
   }
 }
 
-// 授权失效（403 + license 错误码）时，跳转到授权管理页。
-// 业务侧 403（如权限不足）不会带 LIC_* 错误码，不会触发跳转。
-function redirectToLicensePage(message?: string): void {
+// 授权失效（403/503 + license_* 错误码）时，跳转到授权管理页。
+// 业务侧 403（如权限不足）不会带 license_* 错误码，不会触发跳转。
+function redirectToLicensePage(): void {
   if (typeof window === 'undefined') return
   if (window.location.pathname === '/license') return
   window.location.replace('/license')
+}
+
+// 统一状态码词表（《统一授权文件格式规范》§7）。
+// 判据必须与后端返回逐字一致：后端返回 license_*，这里就不能写成 LIC_*。
+const LICENSE_ERROR_CODES = [
+  'license_not_init',
+  'license_missing',
+  'license_malformed',
+  'license_bad_signature',
+  'license_expired',
+  'license_clock_rollback',
+  'license_machine_mismatch',
+  'license_product_mismatch',
+  'license_no_public_key',
+]
+
+function isLicenseErrorCode(code: unknown): boolean {
+  return typeof code === 'string' && LICENSE_ERROR_CODES.includes(code)
 }
 
 api.interceptors.response.use(
@@ -105,11 +123,12 @@ api.interceptors.response.use(
     const status = error?.response?.status
 
     // 授权（License）失效拦截：
-    // 后端 LicenseAuth 中间件对业务路径返回 403 + 错误码 LIC_EXPIRED / LIC_FORGED / LIC_MISSING / LIC_MACHINE_CODE
+    // 后端 LicenseAuth 中间件对业务路径返回 403（初始化失败为 503）+ 统一状态码
+    // license_expired / license_missing / license_bad_signature / ...
     // 前端收到后直接跳到 /license 页，让用户看到「上传新授权文件」入口。
     // 注意 /api/license/upload 与 /api/license/status 是恢复通路，本身不会 403。
     const licCode = (error?.response?.data as { code?: string })?.code
-    if (status === 403 && typeof licCode === 'string' && licCode.startsWith('LIC_')) {
+    if ((status === 403 || status === 503) && isLicenseErrorCode(licCode)) {
       if (!skipErrorHandler) {
         const licMsg =
           (error?.response?.data as { message?: string })?.message ||
@@ -120,7 +139,7 @@ api.interceptors.response.use(
           cause: error,
         })
       }
-      redirectToLicensePage(licCode)
+      redirectToLicensePage()
       // 不继续抛出，避免普通错误处理再次提示
       return Promise.reject(error)
     }

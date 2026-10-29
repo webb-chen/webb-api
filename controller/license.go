@@ -1,17 +1,12 @@
 package controller
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"io"
-	"net"
-	"os"
+	"net/http"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/pkg/license"
 
@@ -19,7 +14,7 @@ import (
 )
 
 // maxLicenseFileSize 是授权文件的大小上限。
-// 一份正常的 license.lic 只有几百字节，这里留足余量，
+// 一份正常的 .lic 文件只有几百字节，这里留足余量，
 // 同时防止有人把大文件当授权上传占满磁盘。
 const maxLicenseFileSize = 1 << 20
 
@@ -27,146 +22,85 @@ const maxLicenseFileSize = 1 << 20
 //
 // GET /api/license/status
 //
-// 注意：本接口在授权失效时依然可以访问（见 middleware/license.go 的放行清单），
-// 否则客户到期后连"当前是什么状态"都查不到，更无从续期。
+// 授权无效时仍返回 HTTP 200，用 valid:false + code 表达失败原因，
+// 这样前端能拿到具体原因，而不是一个没有信息的 403。
 func GetLicenseStatus(c *gin.Context) {
 	st := license.Current()
-	data := licenseStateToAPI(st)
-	data["checked_at"] = st.CheckedAt.Format(time.RFC3339)
-	common.ApiSuccess(c, data)
+	c.JSON(http.StatusOK, licenseStateBody(st, true))
 }
 
-// machineCodeCache 缓存机器指纹：指纹只依赖硬件/系统标识，进程生命周期内不会变化，
-// 无需在每次请求时重复读文件和做哈希。
-var (
-	machineCodeOnce sync.Once
-	machineCodeVal  string
-)
-
-// GetLicenseMachineCode 返回本机的机器指纹（机器码），供授权页展示、
-// 便于技术支持识别具体部署实例。
+// GetLicenseMachineCode 返回本机统一机器码（规范 §5 算法）。
+// 客户把该机器码交给 ULP 管理员即可签发绑定本机的授权。
 //
 // GET /api/license/machine-code
-//
-// 指纹来源（按优先级）：/etc/machine-id（主流 Linux）→
-// /var/lib/dbus/machine-id（旧发行版）→ 主机名 + 首个网卡 MAC（兜底）。
-// 输出为 SHA-256 截断后的 16 位十六进制，形如 A1B2-C3D4-E5F6-0789。
 func GetLicenseMachineCode(c *gin.Context) {
-	common.ApiSuccess(c, gin.H{"machine_code": MachineCode()})
-}
-
-// MachineCode 计算并缓存机器指纹。
-func MachineCode() string {
-	machineCodeOnce.Do(func() {
-		machineCodeVal = formatMachineCode(rawMachineIdentity())
+	code := license.MachineCode()
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"code":         license.CodeOK,
+		"machine_code": code,
+		"data": gin.H{
+			"machine_code": code,
+		},
 	})
-	return machineCodeVal
-}
-
-// rawMachineIdentity 返回原始机器标识串。
-func rawMachineIdentity() string {
-	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-		if b, err := os.ReadFile(path); err == nil {
-			if id := strings.TrimSpace(string(b)); id != "" {
-				return id
-			}
-		}
-	}
-	// 兜底：主机名 + 首个非回环网卡的 MAC 地址
-	host, err := os.Hostname()
-	if err != nil {
-		host = "unknown-host"
-	}
-	return host + "/" + firstMAC()
-}
-
-// firstMAC 返回首个非回环网卡的硬件地址；取不到时返回空串。
-func firstMAC() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ""
-	}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		if addr := iface.HardwareAddr.String(); addr != "" {
-			return addr
-		}
-	}
-	return ""
-}
-
-// formatMachineCode 对原始标识做 SHA-256，取前 16 位十六进制并按 4 位分组。
-func formatMachineCode(raw string) string {
-	sum := sha256.Sum256([]byte("webb-api-license:" + raw))
-	hexStr := strings.ToUpper(hex.EncodeToString(sum[:8]))
-	var b strings.Builder
-	for i := 0; i < len(hexStr); i++ {
-		if i > 0 && i%4 == 0 {
-			b.WriteByte('-')
-		}
-		b.WriteByte(hexStr[i])
-	}
-	return b.String()
 }
 
 // UploadLicense 接收前端上传的 .lic 文件，校验通过后才落盘生效。
 //
 // POST /api/license/upload  (multipart/form-data, 字段名 file)
 //
-// 这里刻意采用「先完整校验、再写入」的顺序（具体实现在 license.Install 内）：
+// 采用「先完整校验、再备份、临时文件、原子替换」的顺序（不变量 6）：
 // 如果先写后校验，一个格式错误的文件就会覆盖掉当前仍然有效的授权，
 // 把客户直接锁在系统外面。
 func UploadLicense(c *gin.Context) {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		common.ApiErrorMsg(c, "请选择要上传的授权文件（表单字段名应为 file）")
+		respondLicenseFailure(c, license.CodeMalformed, "请选择要上传的授权文件（表单字段名应为 file）")
 		return
 	}
 	if fileHeader.Size <= 0 {
-		common.ApiErrorMsg(c, "授权文件为空，请重新选择")
+		respondLicenseFailure(c, license.CodeMalformed, "授权文件为空，请重新选择")
 		return
 	}
 	if fileHeader.Size > maxLicenseFileSize {
-		common.ApiErrorMsg(c, "授权文件过大，请确认上传的是 .lic 授权文件")
+		respondLicenseFailure(c, license.CodeMalformed, "授权文件过大，请确认上传的是 .lic 授权文件")
 		return
 	}
 
 	opened, err := fileHeader.Open()
 	if err != nil {
-		common.ApiErrorMsg(c, "读取上传文件失败: "+err.Error())
+		respondLicenseFailure(c, license.CodeMalformed, "读取上传文件失败: "+err.Error())
 		return
 	}
 	defer opened.Close()
 
 	content, err := io.ReadAll(io.LimitReader(opened, maxLicenseFileSize+1))
 	if err != nil {
-		common.ApiErrorMsg(c, "读取上传文件失败: "+err.Error())
+		respondLicenseFailure(c, license.CodeMalformed, "读取上传文件失败: "+err.Error())
 		return
 	}
 	if len(content) > maxLicenseFileSize {
-		common.ApiErrorMsg(c, "授权文件过大，请确认上传的是 .lic 授权文件")
+		respondLicenseFailure(c, license.CodeMalformed, "授权文件过大，请确认上传的是 .lic 授权文件")
 		return
 	}
 
 	st, err := license.Install(content)
 	if err != nil {
+		code := license.CodeMalformed
+		var le *license.Error
+		if errors.As(err, &le) {
+			code = le.Code
+		}
 		logger.LogWarn(c.Request.Context(), "授权文件安装失败: "+err.Error())
-		// 返回 HTTP 200 + success:false，与项目其他接口的业务失败契约保持一致，
-		// 前端可统一用 handleServerError 展示具体原因。
-		common.ApiErrorMsg(c, "授权文件校验失败: "+err.Error())
+		// 与项目其他接口的业务失败契约保持一致：HTTP 200 + success:false，
+		// 让前端直接展示具体原因（签名不对 / 产品不符 / 机器不符等）。
+		respondLicenseFailure(c, code, "授权文件校验失败: "+err.Error())
 		return
 	}
 
-	expire := ""
-	if st.License != nil {
-		expire = formatLicenseDate(st.License.ExpireTime)
-	}
 	logger.LogInfo(c.Request.Context(), "授权文件更新成功，操作人: "+licenseOperatorName(c)+
-		"，新到期时间: "+expire+"，状态码: "+st.Code)
-
-	common.ApiSuccess(c, licenseStateToAPI(st))
+		"，状态码: "+st.Code)
+	c.JSON(http.StatusOK, licenseStateBody(st, true))
 }
 
 // ReloadLicense 强制立即重新读取授权文件，不等待后台定时复检。
@@ -178,56 +112,97 @@ func ReloadLicense(c *gin.Context) {
 	st := license.Reload()
 	logger.LogInfo(c.Request.Context(), "手动触发授权重载，操作人: "+licenseOperatorName(c)+
 		"，结果状态码: "+st.Code)
-	common.ApiSuccess(c, licenseStateToAPI(st))
+	c.JSON(http.StatusOK, licenseStateBody(st, true))
 }
 
-// licenseStateToAPI 把授权状态转换为接口响应结构。
-// status / upload / reload 三个接口共用，保证前端拿到的字段始终一致，
-// 不必为不同接口写三套解析逻辑。
-func licenseStateToAPI(st license.State) gin.H {
+// licenseStateBody 把授权状态转换为统一响应结构。
+//
+// 顶层字段与规范 §6 完全一致；同时保留 success/data 以兼容本项目既有
+// {success, message, data} 契约。status / upload / reload 三个接口共用，
+// 保证前端拿到的字段始终一致。
+func licenseStateBody(st license.State, success bool) gin.H {
+	payload := licensePayloadAPI(st.License)
 	data := gin.H{
-		"enforced":       license.Enforced(),
-		"valid":          st.Valid,
 		"code":           st.Code,
+		"valid":          st.Valid,
 		"message":        st.Message,
 		"in_grace":       st.InGrace,
 		"remaining_days": st.RemainingDays,
-		"path":           license.Path(),
+		"checked_at":     st.CheckedAt.UTC().Format(time.RFC3339),
+		"license":        payload,
 	}
-
-	lic := st.License
-	if lic == nil {
-		return data
+	body := gin.H{
+		"success": success,
+		"message": st.Message,
+		"data":    data,
 	}
-
-	data["license"] = gin.H{
-		"product":     lic.Product,
-		"customer":    lic.Customer,
-		"issued_at":   formatLicenseDate(lic.IssuedAt),
-		"expire_time": formatLicenseDate(lic.ExpireTime),
-		"grace_days":  lic.GraceDays,
+	for k, v := range data {
+		body[k] = v
 	}
-	return data
+	return body
 }
 
-// formatLicenseDate 以本地时区输出便于人读的日期。
-// 仅用于展示；所有到期比较都使用 UTC 绝对时刻，不受服务器时区影响。
-func formatLicenseDate(t time.Time) string {
-	if t.IsZero() {
-		return ""
+// respondLicenseFailure 返回 HTTP 200 + 统一状态码 + 可读原因。
+// 不能直接覆盖旧授权，所以这里只报告校验失败，不落盘。
+func respondLicenseFailure(c *gin.Context, code string, message string) {
+	body := gin.H{
+		"success":        false,
+		"code":           code,
+		"valid":          false,
+		"message":        message,
+		"in_grace":       false,
+		"remaining_days": 0,
+		"checked_at":     time.Now().UTC().Format(time.RFC3339),
+		"license":        nil,
+		"data": gin.H{
+			"code":           code,
+			"valid":          false,
+			"message":        message,
+			"in_grace":       false,
+			"remaining_days": 0,
+			"checked_at":     time.Now().UTC().Format(time.RFC3339),
+		},
 	}
-	return t.Local().Format("2006-01-02 15:04")
+	c.JSON(http.StatusOK, body)
 }
 
-// licenseOperatorName 从上下文取当前登录用户名，用于审计日志。
-// 取不到用户名时回退到用户 ID，仍取不到则返回 unknown。
-// 授权变更属于敏感操作，留痕比美观重要，因此任何情况下都不返回空字符串。
+// licensePayloadAPI 输出统一载荷字段。永久授权的 expire_time 为 null。
+func licensePayloadAPI(p *license.Payload) gin.H {
+	if p == nil {
+		return nil
+	}
+	var issuedAt interface{}
+	if p.IssuedAt != nil {
+		issuedAt = p.IssuedAt.UTC().Format(time.RFC3339)
+	}
+	var expireAt interface{}
+	if p.ExpireTime != nil {
+		expireAt = p.ExpireTime.UTC().Format(time.RFC3339)
+	}
+	return gin.H{
+		"license_id":       p.LicenseID,
+		"product":          p.Product,
+		"product_display":  p.ProductDisplay,
+		"customer":         p.Customer,
+		"customer_contact": p.CustomerContact,
+		"issued_at":        issuedAt,
+		"expire_time":      expireAt,
+		"grace_days":       p.GraceDays,
+		"machine_code":     p.MachineCode,
+		"instance_id":      p.InstanceID,
+		"features":         p.Features,
+		"permanent":        p.Permanent(),
+	}
+}
+
+// licenseOperatorName 返回触发授权操作的用户，未登录时返回 anonymous。
+// 授权接口本身不走登录鉴权（恢复通路），这里只用于审计日志。
 func licenseOperatorName(c *gin.Context) string {
 	if name := c.GetString("username"); name != "" {
 		return name
 	}
-	if id := c.GetInt("id"); id != 0 {
+	if id := c.GetInt("id"); id > 0 {
 		return "user#" + strconv.Itoa(id)
 	}
-	return "unknown"
+	return "anonymous"
 }

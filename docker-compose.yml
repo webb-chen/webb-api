@@ -33,6 +33,17 @@ services:
       - REDIS_CONN_STRING=redis://:123456@webbapi-redis:6379 # ⚠️ IMPORTANT: Change the password in production!
       - TZ=Asia/Shanghai
       - LICENSE_PATH=/data/license.lic # 授权文件落在持久化数据卷，容器重建不丢失
+      - LICENSE_ENFORCE=true # 强制授权校验，仅本地开发调试时才可设为 false
+      # 机器码默认由程序自动计算（见 docs/license.md）；如需固定，取消注释并填入
+      # 由宿主机 /etc/machine-id 推导的 32 位值，或直接使用通用授权（machine_code=*）：
+      # - LICENSE_MACHINE_CODE=your_32_hex_machine_code
+      # 验签公钥已按 111.170.146.212:7630（ULP）「api」项目的公钥内置进程序，
+      # 离线副本见 授权信息/api-public.pem；此处默认不再重复配置。
+      # 仅在需要临时覆盖时才启用（值必须与平台「api」项目当前公钥一致）：
+      # - |
+      #   LICENSE_PUBLIC_KEY=-----BEGIN PUBLIC KEY-----
+      #   ...
+      #   -----END PUBLIC KEY-----
       - ERROR_LOG_ENABLED=true # 是否启用错误日志记录 (Whether to enable error log recording)
       - BATCH_UPDATE_ENABLED=true  # 是否启用批量更新 (Whether to enable batch update)
       - NODE_NAME=webb-api-node-1  # 节点名称，用于审计日志中标识节点身份；多节点/容器部署时建议设置 (Node name used in audit logs; recommended when running multiple instances or in containers)
