@@ -28,8 +28,8 @@ export {
 } from './api'
 
 export type {
-  LicenseData,
-  LicenseStatus,
+  LicenseCode,
+  LicensePayload,
   LicenseStatusData,
   LicenseStatusResponse,
   LicenseMachineCodeData,

@@ -163,9 +163,8 @@ func (c *runtimeCall) fetch(r *moejs.Realm, argument moejs.Value) (moejs.Value, 
 			return moejs.Undefined(), err
 		}
 	} else if request.Method != http.MethodHead {
-		text := string(response.Body)
-		if body, err = c.runtime.ParseJSONString(text); err != nil {
-			body = moejs.String(text)
+		if body, err = c.runtime.ParseJSON(response.Body); err != nil {
+			body = moejs.String(string(response.Body))
 		}
 	}
 	result := r.NewObject()

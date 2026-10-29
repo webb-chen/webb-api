@@ -1,0 +1,116 @@
+// 自动生成：统一授权平台接入片段（Go）
+// 1) 将本文件放入业务项目（包名可自行调整）；
+// 2) 启动时与每 5 分钟定时调用 VerifyFile()；
+// 3) 完整规范见 docs/接入统一授权平台-适配开发规范.md。
+package licensecheck
+
+import (
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"os"
+	"time"
+)
+
+const LicenseProduct = "api"
+
+const licensePublicKeyPEM = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1/GN15hOhgNRsu6PfK8V
+bQk1d4ekA7naBZT4cR5FXFJ2grlznsh/QRDHonII7Ud4Q0z0exHXWvL0z2vVKAL7
++ivHJrIso7pInb0FxH0Ewmxx1TbdyhS7tbquL5ZNUCi7DM+cIil0+7Fwg/U/QNs7
+qDi/w6KPZMCDCoudaWTvXrpWQXIwwsyfsrHkfcE3vGjbtxSomwxuoyJs5qA21AdZ
+VT5GXjn67B4uUJ1Tf34bbdokN+g3c1t2dVi9zFVHIDOR65+TIOfZOPSLXEvPuZZO
+rA+GUpRGO2kjAYEMh8vjUwaOETDdq+jPkMU/LULGvX449VnepnD9pRD8358cvC2P
+6QIDAQAB
+-----END PUBLIC KEY-----
+`
+
+type licenseEnvelope struct {
+	Data string `json:"data"`
+	Sign string `json:"sign"`
+}
+
+type licensePayload struct {
+	SchemaVersion int        `json:"schema_version"`
+	Platform      string     `json:"platform"`
+	Product       string     `json:"product"`
+	ExpireTime    *time.Time `json:"expire_time"`
+	GraceDays     int        `json:"grace_days"`
+	MachineCode   string     `json:"machine_code"`
+}
+
+// MachineCode 计算本机机器码：SHA-256("ULP-LICENSE-V1:"+raw) 前 16 字节。
+func MachineCode() string {
+	if v := os.Getenv("LICENSE_MACHINE_CODE"); v != "" {
+		return v
+	}
+	raw, _ := os.ReadFile("/etc/machine-id")
+	if len(raw) == 0 {
+		raw = []byte("unknown")
+	}
+	sum := sha256.Sum256([]byte("ULP-LICENSE-V1:" + string(raw)))
+	return hex.EncodeToString(sum[:16])
+}
+
+// VerifyFile 离线校验授权文件，返回 nil 表示有效。
+func VerifyFile(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("license_missing: %w", err)
+	}
+	var env licenseEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return errors.New("license_malformed")
+	}
+	data, err := base64.StdEncoding.DecodeString(env.Data)
+	if err != nil {
+		return errors.New("license_malformed")
+	}
+	sign, err := base64.StdEncoding.DecodeString(env.Sign)
+	if err != nil {
+		return errors.New("license_malformed")
+	}
+	block, _ := pem.Decode([]byte(licensePublicKeyPEM))
+	if block == nil {
+		return errors.New("license_no_public_key")
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return errors.New("license_no_public_key")
+	}
+	pub, ok := pubAny.(*rsa.PublicKey)
+	if !ok {
+		return errors.New("license_no_public_key")
+	}
+	sum := sha256.Sum256(data)
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sign); err != nil {
+		return errors.New("license_bad_signature")
+	}
+	var p licensePayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return errors.New("license_malformed")
+	}
+	if p.SchemaVersion != 1 || p.Platform != "unified-license-platform" {
+		return errors.New("license_malformed")
+	}
+	if p.Product != LicenseProduct {
+		return errors.New("license_product_mismatch")
+	}
+	if p.MachineCode != "*" && p.MachineCode != MachineCode() {
+		return errors.New("license_machine_mismatch")
+	}
+	if p.ExpireTime != nil {
+		deadline := p.ExpireTime.Add(time.Duration(p.GraceDays) * 24 * time.Hour)
+		if time.Now().After(deadline) {
+			return errors.New("license_expired")
+		}
+	}
+	return nil
+}

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2023-2026 QuantumNous
 //
-// 授权管理页面——展示授权状态 + 上传授权文件。
+// 授权管理页面——展示统一授权平台（ULP）授权状态 + 上传授权文件 + 手动重检。
+// 状态码使用《统一授权文件格式规范》§7 的词表，与后端逐字一致。
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -25,16 +26,35 @@ import { cn } from '@/lib/utils'
 import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { getLicenseStatus, getMachineCode, uploadLicense } from './api'
+import {
+  getLicenseStatus,
+  getMachineCode,
+  reloadLicense,
+  uploadLicense,
+} from './api'
 
 type StatusTone = 'success' | 'warning' | 'destructive' | 'muted'
 
-function toneForStatus(code: string | undefined): StatusTone {
-  if (code === 'valid') return 'success'
-  if (code === 'grace') return 'warning'
-  if (code === 'license_missing' || code === 'expired' || code === 'forged')
-    return 'destructive'
-  return 'muted'
+function toneForCode(code: string | undefined): StatusTone {
+  switch (code) {
+    case 'ok':
+      return 'success'
+    case 'license_grace':
+    case 'license_disabled':
+      return 'warning'
+    case 'license_missing':
+    case 'license_malformed':
+    case 'license_bad_signature':
+    case 'license_expired':
+    case 'license_clock_rollback':
+    case 'license_machine_mismatch':
+    case 'license_product_mismatch':
+    case 'license_not_init':
+    case 'license_no_public_key':
+      return 'destructive'
+    default:
+      return 'muted'
+  }
 }
 
 function badgeToneClass(tone: StatusTone): string {
@@ -50,10 +70,10 @@ function badgeToneClass(tone: StatusTone): string {
   }
 }
 
-function formatExpire(value: string | undefined): string {
+function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)
-  if (isNaN(d.getTime())) return value
+  if (Number.isNaN(d.getTime())) return value
   return d.toLocaleString()
 }
 
@@ -65,24 +85,28 @@ export function LicenseManagement() {
     queryKey: ['license', 'status'],
     queryFn: async () => {
       const res = await getLicenseStatus()
-      return requireServerSuccess(res)?.data
+      return requireServerSuccess(res)
     },
   })
   const machineQ = useQuery({
     queryKey: ['license', 'machine-code'],
     queryFn: async () => {
       const res = await getMachineCode()
-      return requireServerSuccess(res)?.data
+      return requireServerSuccess(res)
     },
   })
 
   const upload = useMutation({
-    mutationFn: async (file: File) => {
-      const res = await uploadLicense(file)
-      return requireServerSuccess(res)
-    },
-    onSuccess: () => {
+    mutationFn: (file: File) => uploadLicense(file),
+    onSuccess: (res) => {
+      if (!res.valid) {
+        toast.error(res.message || t('Upload failed'))
+        return
+      }
       toast.success(t('License has been reloaded'))
+      if (res.code === 'license_grace') {
+        toast.warning(t('License has expired and is now in the grace period'))
+      }
       void queryClient.invalidateQueries({ queryKey: ['license'] })
     },
     onError: (err) => {
@@ -90,30 +114,58 @@ export function LicenseManagement() {
     },
   })
 
-  // API 响应结构: { data: { code, message, valid, remaining_days, ... }, success, message }
-  const statusData = statusQ.data?.data
-  const machineCode = machineQ.data?.data?.machine_code
-  const daysLeft = statusData?.remaining_days ?? 0
+  const reload = useMutation({
+    mutationFn: async () => {
+      const res = await reloadLicense()
+      return requireServerSuccess(res)
+    },
+    onSuccess: () => {
+      toast.success(t('License has been reloaded'))
+      void queryClient.invalidateQueries({ queryKey: ['license'] })
+    },
+    onError: (err) => {
+      handleServerError(err, t('Failed to load license status'))
+    },
+  })
+
+  const statusData = statusQ.data
+  const license = statusData?.license
+  const machineCode = machineQ.data?.machine_code ?? license?.machine_code
   const code = statusData?.code
+  const daysLeft = statusData?.remaining_days ?? 0
 
   const statusLabel = (() => {
     switch (code) {
-      case 'valid':
+      case 'ok':
         return t('License is valid')
-      case 'grace':
+      case 'license_grace':
         return t('License has expired and is now in the grace period')
+      case 'license_disabled':
+        return t('License verification is disabled')
+      case 'license_not_init':
+        return t('License module is not ready')
       case 'license_missing':
         return t('No license file found')
-      case 'expired':
+      case 'license_malformed':
+        return t('License file is malformed')
+      case 'license_bad_signature':
+        return t('License signature verification failed')
+      case 'license_expired':
         return t('License has expired')
-      case 'forged':
-        return t('License is forged or has been tampered with')
+      case 'license_clock_rollback':
+        return t('System clock rollback detected')
+      case 'license_machine_mismatch':
+        return t('License is bound to another machine')
+      case 'license_product_mismatch':
+        return t('License belongs to another product')
+      case 'license_no_public_key':
+        return t('License public key is not configured')
       default:
         return t('License status unknown')
     }
   })()
 
-  const tone = toneForStatus(code)
+  const tone = toneForCode(code)
 
   return (
     <AuthLayout>
@@ -147,22 +199,34 @@ export function LicenseManagement() {
               </CardDescription>
             </CardHeader>
             <CardContent className='space-y-3'>
-              <div className='flex items-center gap-2'>
+              <div className='flex flex-wrap items-center gap-2'>
                 <span>{statusLabel}</span>
                 <Badge
                   className={cn(
                     badgeToneClass(tone),
-                    code === 'grace' &&
+                    code === 'license_grace' &&
                       'border-amber-500/50 bg-amber-500/15 text-amber-500'
                   )}
                 >
-                  {t('Days left: {{days}}', { days: daysLeft })}
+                  {license?.permanent
+                    ? t('Permanent license')
+                    : t('Days left: {{days}}', { days: daysLeft })}
                 </Badge>
               </div>
 
               <dl className='grid grid-cols-[120px_1fr] gap-x-4 gap-y-1 text-sm'>
+                <dt className='text-muted-foreground'>{t('Product')}</dt>
+                <dd>{license?.product_display || license?.product || '—'}</dd>
+                <dt className='text-muted-foreground'>{t('Customer')}</dt>
+                <dd>{license?.customer || '—'}</dd>
+                <dt className='text-muted-foreground'>{t('Expire time')}</dt>
+                <dd>
+                  {license?.permanent
+                    ? t('Permanent license')
+                    : formatDateTime(license?.expire_time)}
+                </dd>
                 <dt className='text-muted-foreground'>{t('Checked at')}</dt>
-                <dd>{formatExpire(statusData.checked_at)}</dd>
+                <dd>{formatDateTime(statusData.checked_at)}</dd>
               </dl>
 
               {machineCode && (
@@ -178,7 +242,7 @@ export function LicenseManagement() {
                       variant='ghost'
                       size='sm'
                       onClick={() => {
-                        navigator.clipboard.writeText(machineCode)
+                        void navigator.clipboard.writeText(machineCode)
                         toast.success(t('Copied'))
                       }}
                     >
@@ -192,6 +256,16 @@ export function LicenseManagement() {
                   </p>
                 </div>
               )}
+
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={reload.isPending}
+                onClick={() => reload.mutate()}
+              >
+                {reload.isPending ? t('Checking…') : t('Re-check license')}
+              </Button>
             </CardContent>
           </Card>
         )}
@@ -226,7 +300,7 @@ export function LicenseManagement() {
                 <Input
                   id='license-file'
                   type='file'
-                  accept='.lic'
+                  accept='.lic,application/json'
                   className='cursor-pointer'
                   aria-describedby='license-file-desc'
                 />
@@ -245,9 +319,7 @@ export function LicenseManagement() {
                 className={cn(buttonVariants())}
                 disabled={upload.isPending}
               >
-                {upload.isPending
-                  ? t('Uploading…')
-                  : t('Upload & verify')}
+                {upload.isPending ? t('Uploading…') : t('Upload & verify')}
               </Button>
             </form>
           </CardContent>

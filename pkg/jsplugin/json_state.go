@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -14,6 +15,7 @@ import (
 const (
 	CapabilityJSONClone      = "json-clone@1"
 	CapabilitySubmitSSEDelta = "submit-sse-delta@1"
+	CapabilityDurationAuto   = "duration-auto@1"
 	MaxJSONToolBytes         = 1 << 20
 	maxJSONToolDepth         = 32
 	maxJSONToolNodes         = 32768
@@ -22,7 +24,28 @@ const (
 
 // HasCapability describes host APIs independently of a plugin's mutable globals.
 func HasCapability(name string) bool {
-	return name == CapabilityJSONClone || name == CapabilitySubmitSSEDelta
+	return name == CapabilityJSONClone || name == CapabilitySubmitSSEDelta || name == CapabilityDurationAuto
+}
+
+// UsesDurationAuto reports whether the plugin opts into the -1 "automatic
+// duration" sentinel for duration request fields (CapabilityDurationAuto).
+// Billing facts stay non-negative regardless of this capability.
+func UsesDurationAuto(meta Meta) bool {
+	return slices.Contains(meta.RequiredCapabilities, CapabilityDurationAuto)
+}
+
+// UsesSubmitEventDelta reports whether the plugin opts into delta-based task
+// submit SSE framing. Declaring CapabilitySubmitSSEDelta selects it
+// explicitly; a plugin that only exports parseSubmitEventDelta opts in
+// implicitly, as the bundled providers do.
+func UsesSubmitEventDelta(meta Meta, engine *Engine) bool {
+	if engine == nil || !engine.HasExport("parseSubmitEventDelta") {
+		return false
+	}
+	if slices.Contains(meta.RequiredCapabilities, CapabilitySubmitSSEDelta) {
+		return true
+	}
+	return !engine.HasExport("parseSubmitEvent")
 }
 
 // JSONState owns a request-local JSON result. Appended strings stay in Go and
